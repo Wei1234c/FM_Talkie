@@ -3,51 +3,61 @@ try:
 except:
     from rda5820n_proxy import RDA5820N_proxy, _value_key
 
+import time
+
 import machine
 
 
 
 class Talkie(RDA5820N_proxy):
     FREQ_DEFAULT = 88.8e6
-    STATES = {'Transmit': 0,  # transmit mode
-              'Receive' : 1,  # receive mode, rssi above threshold.
-              # 'Mute'    : 2,  # receive mode, rssi below threshold.
-              }
+    STATES = {'Transmitter': 0, 'Receiver': 1}
     STATES_value_key = _value_key(STATES)
-    WORK_MODES = {'Receive': 'FM_Receiver', 'Transmit': 'FM_Transmitter'}
 
 
-    def __init__(self, bus, pin_ptt, freq = FREQ_DEFAULT, sql = 7, *args, **kwargs):
+    def __init__(self, bus, pin_ptt, freq = FREQ_DEFAULT, sql = 15, check_rssi_interval_ms = 10, *args, **kwargs):
         super().__init__(bus, freq = freq, *args, **kwargs)
 
-        self._pin_ptt = pin_ptt
-        self._sql = sql
-        self._state = None
-
         pin_ptt.irq(trigger = machine.Pin.IRQ_RISING | machine.Pin.IRQ_FALLING, handler = self.ptt_handler)
+
+        self._pin_ptt = pin_ptt
+        self.sql = sql
+        self._check_rssi_interval_ms = check_rssi_interval_ms
+        self.set_state('Receiver')
 
 
     @property
     def state(self):
-        return self._state
+        return self.STATES_value_key[self._state]
 
 
     def set_state(self, state):
-        self._state = state
-        self.set_work_mode(self.WORK_MODES[state])
+        self._state = self.STATES[state]
+        self.set_work_mode(state)
 
 
-    def ptt_handler(self, event_source):
-        iqr_state = machine.disable_irq()
+    def ptt_handler(self, pin_ptt):
+        v1 = pin_ptt.value()
+        time.sleep(0.1)  # de-bounce
+        v2 = pin_ptt.value()
 
-        machine.delay(100)  # de-bounce
-        new_state = self.STATES_value_key[self._pin_ptt.value()]
-        if new_state != self._state:  # only if state changed.
-            self.set_state(new_state)
-
-        machine.enable_irq(iqr_state)
+        if v1 == v2 and v1 != self._state:
+            self._state = v1
+            self.set_state(self.state)
+            print('[{} mode]'.format(self.state))
 
 
     def check_sql(self):
-        if self._state == 'Receive':
-            _ = self.mute(True) if self.rssi < self._sql else self.mute(False)
+        if self.state == 'Receiver':
+            print('[Receiver mode] sql: {} / rssi: {}'.format(self.sql, self.rssi))
+
+            if self.rssi >= self.sql:
+                self.set_volume(self._volume)
+            else:
+                self.write_register(0x05, self._set_element_value(0x05, 0, 4, 0))
+
+
+    def run(self):
+        while True:
+            self.check_sql()
+            time.sleep(self._check_rssi_interval_ms / 1000)
