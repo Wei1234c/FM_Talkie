@@ -15,14 +15,22 @@ class Talkie(RDA5820N_proxy):
     STATES_value_key = _value_key(STATES)
 
 
-    def __init__(self, bus, pin_ptt, freq = FREQ_DEFAULT, sql = 15, check_rssi_interval_ms = 10, *args, **kwargs):
-        super().__init__(bus, freq = freq, *args, **kwargs)
+    def __init__(self, bus, pin_ptt, freq = FREQ_DEFAULT, squelch = 5, check_rssi_interval_ms = 50,
+                 input_level_v = 0.6, adc_gain = 7, tx_power_dBm = 3, volume = 1,
+                 *args, **kwargs):
+
+        super().__init__(bus, freq = freq,
+                         input_level_v = input_level_v,
+                         adc_gain = adc_gain,
+                         tx_power_dBm = tx_power_dBm,
+                         volume = volume,
+                         *args, **kwargs)
 
         pin_ptt.irq(trigger = machine.Pin.IRQ_RISING | machine.Pin.IRQ_FALLING, handler = self.ptt_handler)
 
         self._pin_ptt = pin_ptt
-        self.sql = sql
-        self._check_rssi_interval_ms = check_rssi_interval_ms
+        self.squelch = squelch
+        self._check_rssi_interval_s = check_rssi_interval_ms / 1000
         self.set_state('Receiver')
 
 
@@ -41,17 +49,17 @@ class Talkie(RDA5820N_proxy):
         time.sleep(0.1)  # de-bounce
         v2 = pin_ptt.value()
 
-        if v1 == v2 and v1 != self._state:
-            self._state = v1
+        if v2 == v1 and v2 != self._state:  # only if state changed
+            self._state = v2
             self.set_state(self.state)
             print('[{} mode]'.format(self.state))
 
 
     def check_sql(self):
         if self.state == 'Receiver':
-            print('[Receiver mode] sql: {} / rssi: {}'.format(self.sql, self.rssi))
+            print('[Receiver mode] sql: {} / rssi: {}'.format(self.squelch, self.rssi))
 
-            if self.rssi >= self.sql:
+            if self.rssi >= self.squelch:
                 self.set_volume(self._volume)
             else:
                 self.write_register(0x05, self._set_element_value(0x05, 0, 4, 0))
@@ -60,4 +68,4 @@ class Talkie(RDA5820N_proxy):
     def run(self):
         while True:
             self.check_sql()
-            time.sleep(self._check_rssi_interval_ms / 1000)
+            time.sleep(self._check_rssi_interval_s)
